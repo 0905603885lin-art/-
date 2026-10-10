@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日本旅遊記帳 - 帶相機辨識</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        :root {
+            --primary: #e63946;
+            --secondary: #f1faee;
+            --dark: #1d3557;
+            --light: #457b9d;
+            --success: #2a9d8f;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f8f9fa;
+            color: #333;
+            margin: 0;
+            padding: 16px;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .header h1 { margin: 0; font-size: 22px; color: var(--dark); }
+        .settings-btn {
+            background: none;
+            border: none;
+            font-size: 22px;
+            cursor: pointer;
+            padding: 4px 8px;
+            color: var(--dark);
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .stat-box {
+            background: var(--secondary);
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-title { font-size: 12px; color: #666; }
+        .stat-value { font-size: 18px; font-weight: bold; color: var(--dark); margin-top: 2px; }
+        .over-budget { color: var(--primary) !important; }
+
+        .progress-bar-bg {
+            background-color: #e0e0e0;
+            border-radius: 8px;
+            height: 8px;
+            width: 100%;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            background-color: var(--success);
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .scan-btn {
+            background: #2a9d8f;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 8px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 12px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.4);
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+        }
+        .modal-content {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            width: 85%;
+            max-width: 400px;
+        }
+
+        label { display: block; font-size: 13px; margin: 8px 0 4px; color: #555; }
+        input, select, button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 14px;
+        }
+        button.primary-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            font-weight: bold;
+            margin-top: 12px;
+            cursor: pointer;
+        }
+
+        ul { list-style: none; padding: 0; margin: 0; }
+        li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .item-info { display: flex; flex-direction: column; }
+        .item-title { font-weight: bold; font-size: 14px; }
+        .item-sub { font-size: 11px; color: #888; }
+        .item-amount { text-align: right; font-size: 14px; }
+        .del-btn {
+            background: none;
+            border: none;
+            color: #ccc;
+            width: auto;
+            padding: 0 0 0 8px;
+            cursor: pointer;
+        }
+        .del-btn:hover { color: var(--primary); }
+        .loading-text { font-size: 12px; color: #2a9d8f; text-align: center; margin-top: 4px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>🇯🇵 日本旅遊記帳</h1>
+        <button class="settings-btn" onclick="openModal()" aria-label="旅遊預算設定">⚙️</button>
+    </div>
+
+    <div class="card">
+        <div class="grid">
+            <div class="stat-box">
+                <div class="stat-title">已花費 / 總預算 (TWD)</div>
+                <div class="stat-value" id="summaryTWD">NT$ 0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-title">今日花費 / 建議上限</div>
+                <div class="stat-value" id="todaySummaryJPY">¥ 0</div>
+            </div>
+        </div>
+        <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="totalProgressBar"></div>
+        </div>
+    </div>
+
+    <button class="scan-btn" onclick="triggerCamera()">
+        📷 拍照/掃描標籤辨識價格
+    </button>
+    <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none;" onchange="handleImageScan(event)">
+    <div class="loading-text" id="ocrLoading" role="status">🔍 正在影像辨識價格中，請稍候...</div>
+
+    <div class="card">
+        <form id="expForm" onsubmit="addExpense(event)">
+            <div class="grid">
+                <div>
+                    <label for="expDate">日期</label>
+                    <input type="date" id="expDate" required>
+                </div>
+                <div>
+                    <label for="category">分類</label>
+                    <select id="category">
+                        <option value="餐飲">🍔 餐飲</option>
+                        <option value="交通">🚃 交通</option>
+                        <option value="購物">🛍️ 購物</option>
+                        <option value="住宿">🏨 住宿</option>
+                        <option value="門票">🎟️ 門票</option>
+                        <option value="其他">💡 其他</option>
+                    </select>
+                </div>
+            </div>
+            <div class="grid" style="margin-top: 4px;">
+                <div>
+                    <label for="title">項目名稱</label>
+                    <input type="text" id="title" placeholder="例如：一蘭拉麵" required>
+                </div>
+                <div>
+                    <label for="amount">金額 (日幣 JPY)</label>
+                    <input type="number" id="amount" placeholder="例如：1200" min="0" step="1" required>
+                </div>
+            </div>
+            <button type="submit" class="primary-btn">＋ 加入記帳</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h3 style="margin: 0 0 10px 0; font-size:15px; color:var(--dark);">消費明細</h3>
+        <ul id="expenseList"></ul>
+    </div>
+</div>
+
+<div class="modal" id="settingsModal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-content">
+        <h3 id="settingsTitle" style="margin-top:0;">旅遊預算設定</h3>
+        <label for="budgetTWD">總預算 (TWD)</label>
+        <input type="number" id="budgetTWD" value="30000" step="1000">
+
+        <label for="travelDays">旅遊天數</label>
+        <input type="number" id="travelDays" value="5" min="1">
+
+        <label for="rate">日幣匯率 (JPY to TWD)</label>
+        <input type="number" id="rate" value="0.21" step="0.001" min="0">
+
+        <div style="display:flex; gap:8px; margin-top:16px;">
+            <button onclick="closeModal()" style="background:#ccc; color:#333;">取消</button>
+            <button onclick="saveSettings()" class="primary-btn" style="margin-top:0;">儲存設定</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let expenses = JSON.parse(localStorage.getItem('jp_expenses')) || [];
+    let config = JSON.parse(localStorage.getItem('jp_config_v3')) || {
+        rate: 0.21,
+        days: 5,
+        budgetTWD: 30000
+    };
+
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    function initUI() {
+        document.getElementById('expDate').value = todayStr;
+        document.getElementById('budgetTWD').value = config.budgetTWD;
+        document.getElementById('travelDays').value = config.days;
+        document.getElementById('rate').value = config.rate;
+    }
+
+    function openModal() { document.getElementById('settingsModal').style.display = 'flex'; }
+    function closeModal() { document.getElementById('settingsModal').style.display = 'none'; }
+
+    function saveSettings() {
+        config.budgetTWD = parseFloat(document.getElementById('budgetTWD').value) || 0;
+        config.days = parseInt(document.getElementById('travelDays').value) || 1;
+        config.rate = parseFloat(document.getElementById('rate').value) || 0.21;
+
+        localStorage.setItem('jp_config_v3', JSON.stringify(config));
+        closeModal();
+        updateView();
+    }
+
+    function triggerCamera() {
+        document.getElementById('cameraInput').click();
+    }
+
+    async function handleImageScan(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const loadingEl = document.getElementById('ocrLoading');
+        loadingEl.style.display = 'block';
+
+        try {
+            const result = await Tesseract.recognize(file, 'eng+jpn', {
+                logger: m => console.log(m)
+            });
+
+            const text = result.data.text;
+            console.log('辨識到的文字:', text);
+
+            const numbers = text.match(/[\d,]+/g);
+            let detectedAmount = null;
+
+            if (numbers) {
+                const parsedNums = numbers.map(n => parseInt(n.replace(/,/g, ''))).filter(n => !isNaN(n) && n >= 100 && n <= 200000);
+                if (parsedNums.length > 0) {
+                    detectedAmount = Math.max(...parsedNums);
+                }
+            }
+
+            if (detectedAmount) {
+                document.getElementById('amount').value = detectedAmount;
+            }
+
+            const categorySelect = document.getElementById('category');
+            if (/食|麵|飯|酒|咖啡|cafe|居酒屋|店|食券|サッポロ|ラーメン/i.test(text)) {
+                categorySelect.value = '餐飲';
+            } else if (/駅|切符|JR|地下鉄|バス|ICOCA|SUICA|Taxi/i.test(text)) {
+                categorySelect.value = '交通';
+            } else if (/免税|Tax|藥|Drug|ドン・キホーテ|Bic|ストア|服/i.test(text)) {
+                categorySelect.value = '購物';
+            }
+
+            alert(detectedAmount ? `成功辨識金額：¥ ${detectedAmount}！` : '已完成掃描，未抓到明確數字，請手動輸入金額。');
+        } catch (err) {
+            console.error(err);
+            alert('影像辨識失敗，請重試或手動輸入金額。');
+        } finally {
+            loadingEl.style.display = 'none';
+            event.target.value = '';
+        }
+    }
+
+    function addExpense(e) {
+        e.preventDefault();
+        const date = document.getElementById('expDate').value;
+        const title = document.getElementById('title').value;
+        const amount = parseFloat(document.getElementById('amount').value);
+        const category = document.getElementById('category').value;
+
+        expenses.push({ id: Date.now(), date, title, amount, category });
+        document.getElementById('title').value = '';
+        document.getElementById('amount').value = '';
+
+        localStorage.setItem('jp_expenses', JSON.stringify(expenses));
+        updateView();
+    }
+
+    function deleteExpense(id) {
+        expenses = expenses.filter(item => item.id !== id);
+        localStorage.setItem('jp_expenses', JSON.stringify(expenses));
+        updateView();
+    }
+
+    function updateView() {
+        const rate = config.rate;
+        const budgetTWD = config.budgetTWD;
+        const days = config.days;
+
+        let totalJPY = 0;
+        let todaySpentJPY = 0;
+
+        const listEl = document.getElementById('expenseList');
+        listEl.innerHTML = '';
+
+        expenses.slice().sort((a, b) => b.id - a.id).forEach(item => {
+            totalJPY += item.amount;
+            if (item.date === todayStr) {
+                todaySpentJPY += item.amount;
+            }
+
+            const itemTWD = Math.round(item.amount * rate);
+            const li = document.createElement('li');
+            li.innerHTML = `
+                <div class="item-info">
+                    <span class="item-title"></span>
+                    <span class="item-sub"></span>
+                </div>
+                <div style="display:flex; align-items:center;">
+                    <div class="item-amount">
+                        <div>¥ ${item.amount.toLocaleString()}</div>
+                        <div class="item-sub">≈ $${itemTWD.toLocaleString()}</div>
+                    </div>
+                    <button class="del-btn" aria-label="刪除消費" onclick="deleteExpense(${item.id})">✕</button>
+                </div>
+            `;
+            li.querySelector('.item-title').textContent = item.title;
+            li.querySelector('.item-sub').textContent = `${item.date} · ${item.category}`;
+            listEl.appendChild(li);
+        });
+
+        const totalTWD = Math.round(totalJPY * rate);
+        const usage = budgetTWD > 0 ? Math.round((totalTWD / budgetTWD) * 100) : 0;
+
+        document.getElementById('summaryTWD').innerText = `$${totalTWD.toLocaleString()} / $${budgetTWD.toLocaleString()}`;
+        if (totalTWD > budgetTWD) {
+            document.getElementById('summaryTWD').classList.add('over-budget');
+        } else {
+            document.getElementById('summaryTWD').classList.remove('over-budget');
+        }
+
+        const barFill = document.getElementById('totalProgressBar');
+        barFill.style.width = `${Math.min(usage, 100)}%`;
+        barFill.style.backgroundColor = usage > 100 ? '#e63946' : (usage > 80 ? '#f4a261' : '#2a9d8f');
+
+        const totalBudgetJPY = rate > 0 ? Math.round(budgetTWD / rate) : 0;
+        const dailyTargetJPY = Math.round(totalBudgetJPY / days);
+
+        document.getElementById('todaySummaryJPY').innerText = `¥${todaySpentJPY.toLocaleString()} / ¥${dailyTargetJPY.toLocaleString()}`;
+        if (todaySpentJPY > dailyTargetJPY) {
+            document.getElementById('todaySummaryJPY').classList.add('over-budget');
+        } else {
+            document.getElementById('todaySummaryJPY').classList.remove('over-budget');
+        }
+    }
+
+    initUI();
+    updateView();
+</script>
+
+</body>
+</html>
